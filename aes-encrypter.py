@@ -10,6 +10,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import logging
 import sys
+import subprocess
+import threading
 
 def timerDecorator(func):
     def wrapper(*args, **kwargs):
@@ -28,6 +30,8 @@ class Encripter:
     ENCRYPT_FOLDER_NAMES = True
     REMOVE_AFTER_ENCRYPT = True
     REMOVE_AFTER_DECRYPT = True
+    
+    MAX_THREADS = 10
 
     def __init__(self, password):
         self.password = password
@@ -59,7 +63,7 @@ class Encripter:
         key = kdf.derive(password)
         return key
     
-    def encrypt(self, data):
+    def encrypt(self, data: bytes):
         key = self.generate_key()
         iv = os.urandom(16)
         cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
@@ -69,7 +73,7 @@ class Encripter:
         ct = encryptor.update(data) + encryptor.finalize()
         return base64.b64encode(iv + ct)
     
-    def decrypt(self, data):
+    def decrypt(self, data: bytes):
         key = self.generate_key()
         data = base64.b64decode(data)
         iv = data[:16]
@@ -94,6 +98,7 @@ class Encripter:
             # Encrypt data
             data = self.encrypt(data)
 
+            # Encrypt filename
             filename = file.split('\\')[-1]
             filename  = self.encrypt(filename.encode()).decode().replace('/', '-')
             pathWithFilename = file.replace('\\' + file.split('\\')[-1], '') + '\\' + filename + self.EXTENSION_ENCRYPTED
@@ -151,9 +156,30 @@ class Encripter:
 
         return '\\'.join(separado)
     
+    def encrypt_files (self, files: list):
+        for file in files:
+            self.encrypt_file(file)
+
+    def decrypt_files (self, files: list):
+        for file in files:
+            self.decrypt_file(file)
+    
+    def decrypt_folder_name(self, folder: str):
+        folderSplited = folder.split('\\')
+        folderSplited[-1] = self.decrypt(folderSplited[-1].replace('-', '/').encode()).decode()
+        return '\\'.join(folderSplited)
+
+    def encrypt_folder_name(self, folder: str):
+        folderSplited = folder.split('\\')
+        folderSplited[-1] = self.encrypt(folderSplited[-1].encode()).decode().replace('/', '-')
+        return '\\'.join(folderSplited)
+    
+    
     @timerDecorator
     def encrypt_folder(self, folder: str):
+        threads = []
         allPaths = []
+        allFiles = []
 
         logging.info("Start encrypting folder: '" + folder + "'")
 
@@ -161,8 +187,7 @@ class Encripter:
             for root, dirs, files in os.walk(folder):
                 for file in files:
                     path = os.path.join(root, file)
-                    # print("Encrypting file: '" + path + "'")
-                    encripter.encrypt_file(path)
+                    allFiles.append(path)
 
                 for dir in dirs:
                     path = os.path.join(root, dir)
@@ -170,15 +195,31 @@ class Encripter:
         except Exception as e:
             logging.error("Error encrypting folder: '" + folder + "'")
         
-        logging.info("Start encrypting folder names")
+        logging.info("Start encrypting files")
+        if (len(allFiles) % self.MAX_THREADS) == 0:
+            files_per_thread = len(allFiles) // self.MAX_THREADS
+        else:
+            files_per_thread = len(allFiles) // self.MAX_THREADS + 1
 
+        for i in range(self.MAX_THREADS):
+            if i == self.MAX_THREADS - 1:
+                files = allFiles[i * files_per_thread:]
+            else:
+                files = allFiles[i * files_per_thread:(i + 1) * files_per_thread]
+            t = threading.Thread(target=self.encrypt_files, args=(files,))
+            threads.append(t)
+            t.start()
+        
+        # Wait for all threads to finish
+        for t in threads:
+            t.join()
+
+        logging.info("Start encrypting folder names")
         try:
             allPaths.reverse()
             for path in allPaths:
                 pathOriginal = path
-                path = path.split('\\')
-                path[-1] = encripter.encrypt(path[-1].encode()).decode().replace('/', '-')
-                path = '\\'.join(path)
+                path = self.encrypt_folder_name(path)
                 print("renaming: " + pathOriginal + " to: " + path)
                 os.rename(pathOriginal, path)
         
@@ -191,40 +232,57 @@ class Encripter:
     def decrypt_folder(self, folder: str):
         logging.info("Start decrypting folder: '" + folder + "'")
         allPaths = []
+        allFiles = []
+        threads = []
 
         try:
             for root, dirs, files in os.walk(folder):
                 for file in files:
-                    # print("Decrypting file: '" + file + "'")
                     path = os.path.join(root, file)
-                    encripter.decrypt_file(path)
+                    allFiles.append(path)
 
                 for dir in dirs:
                     path = os.path.join(root, dir)
                     allPaths.append(path)
         except Exception as e:
             logging.error("Error decrypting folder: '" + folder + "'")
+
+        logging.info("Start decrypting files")
+        
+        if(len(allFiles) % self.MAX_THREADS == 0):
+            files_per_thread = len(allFiles) // self.MAX_THREADS
+        else:
+            files_per_thread = len(allFiles) // self.MAX_THREADS + 1
+    
+        for i in range(self.MAX_THREADS):
+            if i == self.MAX_THREADS - 1:
+                files = allFiles[i * files_per_thread:]
+            else:
+                files = allFiles[i * files_per_thread:(i + 1) * files_per_thread]
+
+            t = threading.Thread(target=self.decrypt_files, args=(files,))
+            threads.append(t)
+            t.start()
+        
+        # Wait for all threads to finish
+        for t in threads:
+            t.join()
         
         logging.info("Start decrypting folder names")
-        
         try:
             allPaths.reverse()
             for path in allPaths:
                 pathOriginal = path
-                path = path.split('\\')
-                path[-1] = encripter.decrypt(path[-1].replace('-', '/').encode()).decode()
-                path = '\\'.join(path)
+                path = self.decrypt_folder_name(path)
                 print("renaming: " + pathOriginal + " to: " + path)
                 os.rename(pathOriginal, path)
             
         except Exception as e:
             logging.error("Error decrypting folder names: " + folder)
-    
 
 if __name__ == '__main__':
-
-    encripter = Encripter(input('Password: '))
-
+    encripter = Encripter(input('Password: '))  
+    
     if len(sys.argv) > 1 and (sys.argv[1] == '-d' or sys.argv[1] == '--decrypt') and len(sys.argv) > 2: 
         encripter.decrypt_folder(sys.argv[2])
     elif len(sys.argv) > 1 and (sys.argv[1] == '-e' or sys.argv[1] == '--encrypt') and len(sys.argv) > 2:
