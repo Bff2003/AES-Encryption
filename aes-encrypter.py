@@ -23,7 +23,7 @@ def timerDecorator(func):
         return result
     return wrapper
 
-class Encripter:
+class Encrypter:
 
     EXTENSION_ENCRYPTED = '.enc'
     ENCRYPT_FILENAMES = True
@@ -280,10 +280,67 @@ class Encripter:
         except Exception as e:
             logging.error("Error decrypting folder names: " + folder)
 
+def resetTests():
+    subprocess.run("rmdir -r '.\\sessionsTests\\test\\'", executable="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", shell=True)
+    subprocess.run("cp -R '.\\sessionsTests\\testBck\\' '.\\sessionsTests\\test\\'" , executable="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", shell=True)
+
+def help():
+    print("Usage: py aes-encrypter.py -p YOUR_PASSWORD [OPTION] [PATH]")
+    print("Encrypt or decrypt files and folders using AES-256-CBC")
+    print("Options:")
+    print("  -e, --encrypt\t\tEncrypt files and folders")
+    print("  -d, --decrypt\t\tDecrypt files and folders")
+    print("  -h, --help\t\tShow this help message and exit")
+
+class BadRunException(Exception):
+    pass
+
 if __name__ == '__main__':
-    encripter = Encripter(input('Password: '))  
-    
-    if len(sys.argv) > 1 and (sys.argv[1] == '-d' or sys.argv[1] == '--decrypt') and len(sys.argv) > 2: 
-        encripter.decrypt_folder(sys.argv[2])
-    elif len(sys.argv) > 1 and (sys.argv[1] == '-e' or sys.argv[1] == '--encrypt') and len(sys.argv) > 2:
-        encripter.encrypt_folder(sys.argv[2])
+    try:
+        args = sys.argv[1:]
+        password = None
+        mode = None
+        path = None
+
+        for i in range(len(args)):
+            if args[i] == "-h" or args[i] == "--help":
+                help()
+                sys.exit(0)
+            
+            if args[i] == '-p' or args[i] == '--password':
+                password = args[i + 1]
+
+            if args[i] == "-e" or args[i] == "--encrypt":
+                mode = "encrypt"
+            
+            if args[i] == "-d" or args[i] == "--decrypt":
+                mode = "decrypt"
+        
+        if password is None:
+            raise BadRunException("Password is required")
+        
+        if mode is None:
+            raise BadRunException("No mode selected")
+        
+        if len(args) == 0:
+            raise BadRunException("Path is required")
+        
+        path = args[-1]
+
+        if not os.path.exists(path):
+            raise BadRunException("Path '" + path + "' does not exist")
+
+        encrypter = Encrypter(password)
+        if mode == "encrypt":
+            encrypter.encrypt_folder(path)
+        elif mode == "decrypt":
+            encrypter.decrypt_folder(path)
+            
+    except BadRunException as e:
+        print(e)
+        help()
+        sys.exit(1)
+    except Exception as e:
+        print("Unexpected error")
+        print(e)
+        sys.exit(1)
